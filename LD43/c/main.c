@@ -13,31 +13,27 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-#define SCREEN_WIDTH 800
+#define SCREEN_WIDTH 900
 #define SCREEN_HEIGHT 600
 
 // //
 // Ingredients
-#define UI_INGRED_X         35
+#define UI_INGRED_X         89
 #define UI_INGRED_Y        486
 #define UI_INGRED_SIZE      98
 #define UI_INGRED_SPACING   20
 #define UI_GENERATOR_COUNT   6
 // Fire
-#define UI_FIRE_X       511
-#define UI_FIRE_Y       163
+#define UI_FIRE_X       438
+#define UI_FIRE_Y       177
 #define UI_FIRE_W       200
 #define UI_FIRE_H       279
 #define UI_FIRE_FRAMES    2
 #define UI_FIRE_FPS     0.5
-#define UI_FIRE_SHELF_X 565
-#define UI_FIRE_SHELF_Y 296
-// Shelves
-#define UI_SHELF_X       446
-#define UI_SHELF_Y        28
-#define UI_SHELF_SIZE     98
-#define UI_SHELF_SPACING  20
-#define UI_SHELF_COUNT     3
+#define UI_FIRE_SHELF_X 492
+#define UI_FIRE_SHELF_Y 310
+#define UI_FIRE_COUNT     2
+#define UI_FIRE_SPACING  27
 // Tables
 #define UI_TABLE_COUNT   4
 #define UI_TABLE_W     190
@@ -115,18 +111,22 @@ char * god_texture_paths[GOD_COUNT] = {
 };
 
 typedef struct {
+	int frame;
+	float frame_timer;
+	Ingredient in_fire;
+	float cook_time;
+	bool cooking;
+} Fire;
+
+typedef struct {
 	// Textures
 	SDL_Texture * bg_texture;
 	SDL_Texture * ingredient_textures[INGRED_COUNT];
 	SDL_Texture * logs_texture;
 	SDL_Texture * fire_textures[UI_FIRE_FRAMES];
 	SDL_Texture * god_textures[GOD_COUNT];
-	// Fire
-	int fire_frame;
-	float fire_frame_timer;
-	Ingredient in_fire;
-	float cook_time;
-	bool cooking;
+	// Fires
+	Fire fires[UI_FIRE_COUNT];
 	// Ingredients
 	Ingredient transient_ingredient;
 	Ingredient * transient_previous;
@@ -135,8 +135,6 @@ typedef struct {
 	Ingredient * table_orders[UI_TABLE_COUNT];
 	float god_spawn_reset;
 	float god_spawn_timer;
-	// Shelves
-	Ingredient shelves[UI_SHELF_COUNT];
 } State_Playing;
 
 enum Game_State {
@@ -160,13 +158,6 @@ SDL_Rect ingredient_box(Ingredient ingredient)
 {
 	return make_SDL_Rect(UI_INGRED_X + (UI_INGRED_SIZE + UI_INGRED_SPACING) * ingredient,
 						 UI_INGRED_Y, UI_INGRED_SIZE, UI_INGRED_SIZE);
-}
-
-SDL_Rect shelf_box(int shelf)
-{
-	assert(shelf >= 0 && shelf < UI_SHELF_COUNT);
-	return make_SDL_Rect(UI_SHELF_X + (UI_SHELF_SIZE + UI_SHELF_SPACING) * shelf,
-						 UI_SHELF_Y, UI_SHELF_SIZE, UI_SHELF_SIZE);
 }
 
 SDL_Rect table_box(int table)
@@ -196,11 +187,22 @@ SDL_Rect order_box(int table, int order)
 	return tb;
 }
 
+SDL_Rect fire_box(int fire)
+{
+	return make_SDL_Rect(UI_FIRE_X + (UI_FIRE_W + UI_FIRE_SPACING) * fire,
+						 UI_FIRE_Y, UI_FIRE_W, UI_FIRE_H);
+}
+
+SDL_Rect fire_shelf_box(int fire)
+{
+	return make_SDL_Rect(UI_FIRE_SHELF_X + (UI_FIRE_W + UI_FIRE_SPACING) * fire,
+						 UI_FIRE_SHELF_Y, UI_INGRED_SIZE, UI_INGRED_SIZE);
+}
+
 static SDL_State sdl_state;
 
 SDL_Texture * load_texture_from_path(char * path)
 {
-	//printf("%s\n", path);
 	int w, h, n;
 	unsigned char * data = stbi_load(path, &w, &h, &n, 4);
 	assert(data);
@@ -219,12 +221,14 @@ void state_playing_init(State_Playing * state)
 	state->transient_previous = NULL;
 
 	// Fire init
-	state->fire_frame = 0;
-	state->fire_frame_timer = UI_FIRE_FPS;
-	state->in_fire = INGRED_NONE;
-	state->cook_time = COOK_TIME;
-	state->cooking = false;
-
+	for (int i = 0; i < UI_FIRE_COUNT; i++) {
+		state->fires[i].frame = 0;
+		state->fires[i].frame_timer = UI_FIRE_FPS;
+		state->fires[i].in_fire = INGRED_NONE;
+		state->fires[i].cook_time = COOK_TIME;
+		state->fires[i].cooking = false;
+	}
+	
 	// Gods
 	for (int i = 0; i < UI_TABLE_COUNT; i++) {
 		state->tables[i] = GOD_NONE;
@@ -232,11 +236,6 @@ void state_playing_init(State_Playing * state)
 	}
 	state->god_spawn_reset = 15.0;
 	state->god_spawn_timer = 0.0;
-
-	// Shelf init
-	for (int i = 0; i < UI_SHELF_COUNT; i++) {
-		state->shelves[i] = INGRED_NONE;
-	}
 	
 	// Background texture
 	state->bg_texture = load_texture_from_path("resources/bg.png");
@@ -246,7 +245,7 @@ void state_playing_init(State_Playing * state)
 		state->ingredient_textures[i] =
 			load_texture_from_path(ingredient_texture_paths[i]);
 	}
-	
+
 	// Bonfire textures
 	state->logs_texture = load_texture_from_path("resources/logs.png");
 	for (int i = 0; i < UI_FIRE_FRAMES; i++) {
@@ -273,18 +272,11 @@ Ingredient generator_click(Vector2 pos)
 	return INGRED_NONE;
 }
 
-bool over_fire(Vector2 pos)
+int over_fire(Vector2 pos)
 {
 	SDL_Point point = (SDL_Point) { pos.x, pos.y };
-	SDL_Rect rect = make_SDL_Rect(UI_FIRE_X, UI_FIRE_Y, UI_FIRE_W, UI_FIRE_H);
-	return SDL_PointInRect(&point, &rect);
-}
-
-int over_shelf(Vector2 pos)
-{
-	SDL_Point point = (SDL_Point) { pos.x, pos.y };
-	for (int i = 0; i < UI_SHELF_COUNT; i++) {
-		SDL_Rect rect = shelf_box(i);
+	for (int i = 0; i < UI_FIRE_COUNT; i++) {
+		SDL_Rect rect = fire_box(i);
 		if (SDL_PointInRect(&point, &rect)) {
 			return i;
 		}
@@ -312,18 +304,12 @@ void state_playing_mbdown(State_Playing * state, Vector2 mpos)
 		state->transient_ingredient = new_ingredient;
 	}
 	// Check fire
-	if (over_fire(mpos) && state->in_fire != INGRED_NONE && !state->cooking) {
-		state->transient_ingredient = state->in_fire;
-		state->transient_previous = &state->in_fire;
-		state->in_fire = INGRED_NONE;
-	}
-	// Check shelves
-	if (over_shelf(mpos) != -1) {
-		int shelf = over_shelf(mpos);
-		if (state->shelves[shelf] != INGRED_NONE) {
-			state->transient_ingredient = state->shelves[shelf];
-			state->transient_previous = &(state->shelves[shelf]);
-			state->shelves[shelf] = INGRED_NONE;
+	if (over_fire(mpos) != -1) {
+		Fire * fire = &state->fires[over_fire(mpos)];
+		if (fire->in_fire != INGRED_NONE && !fire->cooking) {
+			state->transient_ingredient = fire->in_fire;
+			state->transient_previous = &fire->in_fire;
+			fire->in_fire = INGRED_NONE;
 		}
 	}
 }
@@ -334,27 +320,22 @@ void state_playing_mbup(State_Playing * state, Vector2 mpos)
 		return;
 	}
 	
-	// Check fire
-	if (over_fire(mpos) && state->in_fire == INGRED_NONE && state->transient_ingredient < INGRED_UNCOOKED_COUNT) {
-		state->in_fire = state->transient_ingredient;
-		state->transient_previous = NULL;
-		state->cook_time = COOK_TIME;
-		state->cooking = true;
-	}
-	
-	// Check shelves
-	if (over_shelf(mpos) != -1) {
-		int shelf = over_shelf(mpos);
-		if (state->shelves[shelf] == INGRED_NONE) {
-			state->shelves[shelf] = state->transient_ingredient;
+	// Check fires
+	if (over_fire(mpos) != -1) {
+		Fire * fire = &state->fires[over_fire(mpos)];
+		if (fire->in_fire == INGRED_NONE && state->transient_ingredient < INGRED_UNCOOKED_COUNT) {
+			fire->in_fire = state->transient_ingredient;
 			state->transient_previous = NULL;
+			fire->cook_time = COOK_TIME;
+			fire->cooking = true;
 		}
 	}
 	
 	// Check tables
 	if (over_table(mpos) != -1) {
 		int table = over_table(mpos);
-		if (sb_last(state->table_orders[table]) == state->transient_ingredient) {
+		if (state->tables[table] != GOD_NONE &&
+			sb_last(state->table_orders[table]) == state->transient_ingredient) {
 			sb_pop(state->table_orders[table]);
 			state->transient_previous = NULL;
 			if (sb_count(state->table_orders[table]) == 0) {
@@ -394,11 +375,14 @@ Ingredient * generate_order()
 void state_playing_update(State_Playing * state)
 {
 	// Cook food
-	if (state->cooking) {
-		state->cook_time -= sdl_state.delta_time;
-		if (state->cook_time <= 0) {
-			state->cooking = false;
-			state->in_fire += INGRED_UNCOOKED_COUNT;
+	for (int i = 0; i < UI_FIRE_COUNT; i++) {
+		Fire * fire = &state->fires[i];
+		if (fire->cooking) {
+			fire->cook_time -= sdl_state.delta_time;
+			if (fire->cook_time <= 0) {
+				fire->cooking = false;
+				fire->in_fire += INGRED_UNCOOKED_COUNT;
+			}
 		}
 	}
 	// Spawn gods
@@ -445,28 +429,22 @@ void state_playing_render(State_Playing * state)
 	}
 	
 	// Fire
-	{
-		SDL_Rect rect = make_SDL_Rect(UI_FIRE_X, UI_FIRE_Y, UI_FIRE_W, UI_FIRE_H);
+	for (int i = 0; i < UI_FIRE_COUNT; i++) {
+		Fire * fire = &state->fires[i];
+		SDL_Rect rect = fire_box(i);
 		SDL_RenderCopy(sdl_state.renderer, state->logs_texture, NULL, &rect);
-		SDL_RenderCopy(sdl_state.renderer, state->fire_textures[state->fire_frame], NULL, &rect);
-		if (state->in_fire != INGRED_NONE) {
-			SDL_Rect ingred_rect = make_SDL_Rect(UI_FIRE_SHELF_X, UI_FIRE_SHELF_Y, UI_SHELF_SIZE, UI_SHELF_SIZE);
-			SDL_RenderCopy(sdl_state.renderer, state->ingredient_textures[state->in_fire], NULL, &ingred_rect);
+		SDL_RenderCopy(sdl_state.renderer, state->fire_textures[fire->frame], NULL, &rect);
+		if (fire->in_fire != INGRED_NONE) {
+			SDL_Rect ingred_rect = fire_shelf_box(i);
+			SDL_RenderCopy(sdl_state.renderer, state->ingredient_textures[fire->in_fire], NULL, &ingred_rect);
 		}
-	}
-	
-	// // Update fire animation
-	state->fire_frame_timer -= sdl_state.delta_time;
-	if (state->fire_frame_timer < 0) {
-		state->fire_frame = (state->fire_frame + 1) % UI_FIRE_FRAMES;
-		state->fire_frame_timer = UI_FIRE_FPS;
-	}
-
-	// Shelves
-	for (int i = 0; i < UI_SHELF_COUNT; i++) {
-		if (state->shelves[i] == INGRED_NONE) continue;
-		SDL_Rect rect = shelf_box(i);
-		SDL_RenderCopy(sdl_state.renderer, state->ingredient_textures[state->shelves[i]], NULL, &rect);
+		
+		// Update fire animation
+		fire->frame_timer -= sdl_state.delta_time * (((float) rand() / (float) RAND_MAX) * 1.2 - 0.1);
+		if (fire->frame_timer < 0) {
+			fire->frame = (fire->frame + 1) % UI_FIRE_FRAMES;
+			fire->frame_timer = UI_FIRE_FPS;
+		}
 	}
 
 	// Gods
