@@ -126,6 +126,7 @@ typedef enum {
 	GOD_RA,
 	GOD_ODIN,
 	GOD_VENUS,
+	GOD_ANANSI,
 	GOD_COUNT,
 } God;
 
@@ -138,6 +139,7 @@ char * god_texture_paths[GOD_COUNT] = {
 	"resources/ra.png",
 	"resources/odin.png",
 	"resources/venus.png",
+	"resources/anansi.png",
 };
 
 SDL_Texture * load_texture_from_path(char * path)
@@ -212,6 +214,7 @@ typedef enum {
 typedef struct {
 	// Textures
 	SDL_Texture * bg_texture;
+	SDL_Texture * death_texture;
 	SDL_Texture * ingredient_textures[INGRED_COUNT];
 	SDL_Texture * logs_texture;
 	SDL_Texture * fire_textures[UI_FIRE_FRAMES];
@@ -227,6 +230,9 @@ typedef struct {
 	float god_spawn_reset;
 	float god_spawn_this_reset;
 	float god_spawn_timer;
+	// Win?
+	bool lost;
+	float death_timer;
 } State_Playing;
 
 SDL_Rect ingredient_box(Ingredient ingredient)
@@ -298,8 +304,14 @@ void state_playing_init(State_Playing * state)
 	state->god_spawn_this_reset = state->god_spawn_reset;
 	state->god_spawn_timer = 0.0;
 	
+	// Death timer
+	state->death_timer = 5.0;
+
 	// Background texture
 	state->bg_texture = load_texture_from_path("resources/bg.png");
+
+	// Death screen texture
+	state->death_texture = load_texture_from_path("resources/death.png");
 	
 	// Ingredient textures
 	for (int i = 0; i < INGRED_COUNT; i++) {
@@ -319,6 +331,9 @@ void state_playing_init(State_Playing * state)
 	for (int i = 0; i < GOD_COUNT; i++) {
 		state->god_textures[i] = load_texture_from_path(god_texture_paths[i]);
 	}
+
+	// Win?
+	state->lost = false;
 }
 
 Ingredient generator_click(Vector2 pos)
@@ -448,6 +463,15 @@ Ingredient * generate_order()
 
 Playing_Msg state_playing_update(State_Playing * state)
 {
+	// Death screen
+	if (state->lost) {
+		if (state->death_timer < 0) {
+			return PLAYING_LOST;
+		}
+		state->death_timer -= sdl_state.delta_time;
+		return PLAYING_OK;
+	}
+
 	// Cook food
 	for (int i = 0; i < UI_FIRE_COUNT; i++) {
 		Fire * fire = &state->fires[i];
@@ -484,7 +508,7 @@ Playing_Msg state_playing_update(State_Playing * state)
 			}
 		}
 		if (full) {
-			return PLAYING_LOST;
+			state->lost = true;
 		}
 	}
 	state->god_spawn_timer -= sdl_state.delta_time;
@@ -493,6 +517,12 @@ Playing_Msg state_playing_update(State_Playing * state)
 
 void state_playing_render(State_Playing * state)
 {
+	// Death screen
+	if (state->lost) {
+		SDL_RenderCopy(sdl_state.renderer, state->death_texture, NULL, NULL);
+		return;
+	}
+
 	// Background
 	SDL_RenderCopy(sdl_state.renderer, state->bg_texture, NULL, NULL);
 	
