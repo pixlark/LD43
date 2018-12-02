@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdbool.h>
 #include <math.h>
 #include <time.h>
@@ -52,6 +53,9 @@
 #define UI_CLOCK_X      537
 #define UI_CLOCK_Y       88
 #define UI_CLOCK_RADIUS  39
+// Main Menu
+#define UI_PLAY_RECT ((SDL_Rect) {225, 146, 451, 135})
+#define UI_QUIT_RECT ((SDL_Rect) {162, 302, 559, 278})
 // //
 
 typedef struct {
@@ -68,6 +72,14 @@ SDL_Rect make_SDL_Rect(int x, int y, int w, int h)
 {
 	return (SDL_Rect) { x, y, w, h };
 }
+
+typedef struct {
+	SDL_Renderer * renderer;
+	float delta_time;
+	uint64_t last_count;
+} SDL_State;
+
+static SDL_State sdl_state;
 
 #define COOK_TIME 3.0
 typedef enum {
@@ -111,6 +123,8 @@ typedef enum {
 	GOD_POSEIDON,
 	GOD_JESUS,
 	GOD_THOR,
+	GOD_ANUBIS,
+	GOD_RA,
 	GOD_COUNT,
 } God;
 
@@ -119,7 +133,65 @@ char * god_texture_paths[GOD_COUNT] = {
 	"resources/poseidon.png",
 	"resources/jesus.png",
 	"resources/thor.png",
+	"resources/anubis.png",
+	"resources/ra.png",
 };
+
+SDL_Texture * load_texture_from_path(char * path)
+{
+	int w, h, n;
+	unsigned char * data = stbi_load(path, &w, &h, &n, 4);
+	assert(data);
+	SDL_Surface * surface = SDL_CreateRGBSurfaceFrom(data, w, h, 4 * 8, w * 4,
+													 0x000000ff, 0x0000ff00,
+													 0x00ff0000, 0xff000000);
+	SDL_Texture * texture = SDL_CreateTextureFromSurface(sdl_state.renderer, surface);
+	SDL_FreeSurface(surface);
+	return texture;
+}
+
+typedef enum {
+	MAIN_MENU_NOTHING,
+	MAIN_MENU_PLAY,
+	MAIN_MENU_QUIT,
+} Main_Menu_Msg;
+
+typedef struct {
+	SDL_Texture * bg;
+} State_Main_Menu;
+
+void state_main_menu_init(State_Main_Menu * state)
+{
+	state->bg = load_texture_from_path("resources/title.png");
+}
+
+void state_main_menu_event(State_Main_Menu * state, SDL_Event event)
+{
+	
+}
+
+Main_Menu_Msg state_main_menu_update(State_Main_Menu * state)
+{
+	int mx, my;
+	uint32_t mask = SDL_GetMouseState(&mx, &my);
+	if (mask & SDL_BUTTON(SDL_BUTTON_LEFT)) {
+		SDL_Point point = (SDL_Point) {mx, my};
+		SDL_Rect play_rect = UI_PLAY_RECT;
+		if (SDL_PointInRect(&point, &play_rect)) {
+			return MAIN_MENU_PLAY;
+		}
+		SDL_Rect quit_rect = UI_QUIT_RECT;
+		if (SDL_PointInRect(&point, &quit_rect)) {
+			return MAIN_MENU_QUIT;
+		}
+	}
+	return MAIN_MENU_NOTHING;
+}
+
+void state_main_menu_render(State_Main_Menu * state)
+{
+	SDL_RenderCopy(sdl_state.renderer, state->bg, NULL, NULL);
+}
 
 typedef struct {
 	int frame;
@@ -128,6 +200,11 @@ typedef struct {
 	float cook_time;
 	bool cooking;
 } Fire;
+
+typedef enum {
+	PLAYING_OK,
+	PLAYING_LOST,
+} Playing_Msg;
 
 typedef struct {
 	// Textures
@@ -148,23 +225,6 @@ typedef struct {
 	float god_spawn_this_reset;
 	float god_spawn_timer;
 } State_Playing;
-
-enum Game_State {
-	STATE_PLAYING,
-};
-
-typedef struct {
-	enum Game_State type;
-	union {
-		State_Playing state_playing;
-	};
-} Game_State;
-
-typedef struct {
-	SDL_Renderer * renderer;
-	float delta_time;
-	uint64_t last_count;
-} SDL_State;
 
 SDL_Rect ingredient_box(Ingredient ingredient)
 {
@@ -211,21 +271,6 @@ SDL_Rect fire_shelf_box(int fire)
 						 UI_FIRE_SHELF_Y, UI_INGRED_SIZE, UI_INGRED_SIZE);
 }
 
-static SDL_State sdl_state;
-
-SDL_Texture * load_texture_from_path(char * path)
-{
-	int w, h, n;
-	unsigned char * data = stbi_load(path, &w, &h, &n, 4);
-	assert(data);
-	SDL_Surface * surface = SDL_CreateRGBSurfaceFrom(data, w, h, 4 * 8, w * 4,
-													 0x000000ff, 0x0000ff00,
-													 0x00ff0000, 0xff000000);
-	SDL_Texture * texture = SDL_CreateTextureFromSurface(sdl_state.renderer, surface);
-	SDL_FreeSurface(surface);
-	return texture;
-}
-
 void state_playing_init(State_Playing * state)
 {
 	// Transient init
@@ -246,7 +291,7 @@ void state_playing_init(State_Playing * state)
 		state->tables[i] = GOD_NONE;
 		state->table_orders[i] = NULL;
 	}
-	state->god_spawn_reset = 15.0;
+	state->god_spawn_reset = 10.0;
 	state->god_spawn_this_reset = state->god_spawn_reset;
 	state->god_spawn_timer = 0.0;
 	
@@ -398,7 +443,7 @@ Ingredient * generate_order()
 	return list;
 }
 
-void state_playing_update(State_Playing * state)
+Playing_Msg state_playing_update(State_Playing * state)
 {
 	// Cook food
 	for (int i = 0; i < UI_FIRE_COUNT; i++) {
@@ -415,8 +460,8 @@ void state_playing_update(State_Playing * state)
 	if (state->god_spawn_timer <= 0.0) {
 		state->god_spawn_timer = state->god_spawn_reset;
 		state->god_spawn_this_reset = state->god_spawn_reset;
-		state->god_spawn_reset *= 0.9;
-		state->god_spawn_reset = fmax(state->god_spawn_reset, 8.0);
+		state->god_spawn_reset *= 0.95;
+		state->god_spawn_reset = fmax(state->god_spawn_reset, 5.0);
 		bool full = true;
 		for (int i = 0; i < UI_TABLE_COUNT; i++) {
 			if (state->tables[i] == GOD_NONE) {
@@ -436,10 +481,11 @@ void state_playing_update(State_Playing * state)
 			}
 		}
 		if (full) {
-			printf("You lose!\n");
+			return PLAYING_LOST;
 		}
 	}
 	state->god_spawn_timer -= sdl_state.delta_time;
+	return PLAYING_OK;
 }
 
 void state_playing_render(State_Playing * state)
@@ -519,6 +565,19 @@ void state_playing_render(State_Playing * state)
 	}
 }
 
+enum Game_State {
+	STATE_PLAYING,
+	STATE_MAIN_MENU,
+};
+
+typedef struct {
+	enum Game_State type;
+	union {
+		State_Playing   state_playing;
+		State_Main_Menu state_main_menu;
+	};
+} Game_State;
+
 int main()
 {
 	srand(time(0));
@@ -533,19 +592,22 @@ int main()
 	sdl_state.renderer = renderer;
 	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
-	Game_State * game_state_stack = NULL;
+	Game_State ** game_state_stack = NULL;
 
 	{
-		State_Playing state;
-		sb_push(game_state_stack,
-			((Game_State) { .type = STATE_PLAYING, .state_playing = state }));
+		Game_State * gs = (Game_State*) malloc(sizeof(Game_State));
+		gs->type = STATE_MAIN_MENU;
+		sb_push(game_state_stack, gs);
 	}
 
 	for (int i = 0; i < sb_count(game_state_stack); i++) {
-		Game_State * state = game_state_stack + i;
+		Game_State * state = game_state_stack[i];
 		switch (state->type) {
 		case STATE_PLAYING:
 			state_playing_init(&(state->state_playing));
+			break;
+		case STATE_MAIN_MENU:
+			state_main_menu_init(&(state->state_main_menu));
 			break;
 		default:
 			assert(false);
@@ -556,7 +618,7 @@ int main()
 	SDL_Event event;
 	bool running = true;
 	while (running && sb_count(game_state_stack) > 0) {
-		Game_State * game_state = &(sb_last(game_state_stack));
+		Game_State * game_state = sb_last(game_state_stack);
 		
 		while (SDL_PollEvent(&event) != 0) {
 			if (event.type == SDL_QUIT) {
@@ -565,6 +627,9 @@ int main()
 				switch (game_state->type) {
 				case STATE_PLAYING:
 					state_playing_event(&(game_state->state_playing), event);
+					break;
+				case STATE_MAIN_MENU:
+					state_main_menu_event(&(game_state->state_main_menu), event);
 					break;
 				default:
 					assert(false);
@@ -576,16 +641,43 @@ int main()
 		SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0x00, 0xff);
 		SDL_RenderClear(renderer);
 		
-		switch (sb_last(game_state_stack).type) {
-		case STATE_PLAYING:
-			state_playing_update(&(game_state->state_playing));
-			state_playing_render(&(game_state->state_playing));
-			break;
+		switch (sb_last(game_state_stack)->type) {
+		case STATE_PLAYING: {
+			Playing_Msg msg = state_playing_update(&(game_state->state_playing));
+			switch (msg) {
+			case PLAYING_OK:
+				state_playing_render(&(game_state->state_playing));
+				break;
+			case PLAYING_LOST:
+				sb_pop(game_state_stack);
+				break;
+			}
+		} break;
+		case STATE_MAIN_MENU: {
+			Main_Menu_Msg msg = state_main_menu_update(&(game_state->state_main_menu));
+			switch (msg) {
+			case MAIN_MENU_NOTHING:
+				state_main_menu_render(&(game_state->state_main_menu));
+				break;
+			case MAIN_MENU_PLAY: {
+				Game_State * gs = (Game_State*) malloc(sizeof(Game_State));
+				gs->type = STATE_PLAYING;
+				state_playing_init(&gs->state_playing);
+				sb_push(game_state_stack, gs);
+			} break;
+			case MAIN_MENU_QUIT:
+				sb_pop(game_state_stack);
+				break;
+			}
+		} break;
 		default:
 			assert(false);
 			break;
 		}
-		
+
+		printf("%d\r", sb_count(game_state_stack));
+		fflush(stdout);
+							   
 		SDL_RenderPresent(renderer);
 		
 		uint64_t frame_end = SDL_GetPerformanceCounter();
