@@ -8,6 +8,7 @@
 
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_mixer.h>
 
 #include "stretchy_buffer.h"
 
@@ -70,6 +71,65 @@ Vector2 make_Vector2(int x, int y)
 SDL_Rect make_SDL_Rect(int x, int y, int w, int h)
 {
 	return (SDL_Rect) { x, y, w, h };
+}
+
+typedef enum {
+	SOUND_TSS,
+	SOUND_TSCH,
+	SOUND_TABLED,
+	SOUND_EAT_LOW,
+	SOUND_EAT_MED,
+	SOUND_EAT_HIGH,
+	SOUND_THUNDER,
+	SOUND_COUNT
+} Sound;
+
+char * sound_paths[SOUND_COUNT] = {
+	"resources/tss.ogg",
+	"resources/tsch.ogg",
+	"resources/tabled.ogg",
+	"resources/eat-low.ogg",
+	"resources/eat-med.ogg",
+	"resources/eat-high.ogg",
+	"resources/thunder.ogg",
+};
+
+typedef enum {
+	MUSIC_MENU,
+	MUSIC_PLAYING,
+	MUSIC_COUNT
+} Music;
+
+char * music_paths[MUSIC_COUNT] = {
+	"resources/menu.ogg",
+	"resources/music.ogg",
+};
+
+typedef struct {
+	Mix_Chunk * sounds[SOUND_COUNT];
+	Mix_Music * music[MUSIC_COUNT];
+} Sound_State;
+
+static Sound_State sound_state;
+
+void sound_init()
+{
+	for (int i = 0; i < SOUND_COUNT; i++) {
+		sound_state.sounds[i] = Mix_LoadWAV(sound_paths[i]);
+	}
+	for (int i = 0; i < MUSIC_COUNT; i++) {
+		sound_state.music[i] = Mix_LoadMUS(music_paths[i]);
+	}
+}
+
+void play_music(Music music)
+{
+	Mix_PlayMusic(sound_state.music[music], -1);
+}
+
+void play_sound(Sound sound)
+{
+	Mix_PlayChannel(-1, sound_state.sounds[sound], 0);
 }
 
 typedef struct {
@@ -142,6 +202,27 @@ char * god_texture_paths[GOD_COUNT] = {
 	"resources/anansi.png",
 };
 
+void god_eating_sound(God god)
+{
+	switch (god) {
+	case GOD_ZEUS:
+	case GOD_THOR:
+	case GOD_ANUBIS:
+	case GOD_ODIN:
+	case GOD_RA:
+		play_sound(SOUND_EAT_LOW);
+		break;
+	case GOD_POSEIDON:
+	case GOD_JESUS:
+	case GOD_ANANSI:
+		play_sound(SOUND_EAT_MED);
+		break;
+	case GOD_VENUS:
+		play_sound(SOUND_EAT_HIGH);
+		break;
+	}
+}
+
 SDL_Texture * load_texture_from_path(char * path)
 {
 	int w, h, n;
@@ -167,6 +248,7 @@ typedef struct {
 
 void state_main_menu_init(State_Main_Menu * state)
 {
+	play_music(MUSIC_MENU);
 	state->bg = load_texture_from_path("resources/title.png");
 }
 
@@ -282,6 +364,9 @@ SDL_Rect fire_shelf_box(int fire)
 
 void state_playing_init(State_Playing * state)
 {
+	// Play music
+	play_music(MUSIC_PLAYING);
+
 	// Transient init
 	state->transient_ingredient = INGRED_NONE;
 	state->transient_previous = NULL;
@@ -407,6 +492,7 @@ void state_playing_mbup(State_Playing * state, Vector2 mpos)
 	if (over_fire(mpos) != -1) {
 		Fire * fire = &state->fires[over_fire(mpos)];
 		if (fire->in_fire == INGRED_NONE && state->transient_ingredient < INGRED_UNCOOKED_COUNT) {
+			play_sound(SOUND_TSCH);
 			fire->in_fire = state->transient_ingredient;
 			state->transient_previous = NULL;
 			fire->cook_time = COOK_TIME;
@@ -419,6 +505,7 @@ void state_playing_mbup(State_Playing * state, Vector2 mpos)
 		int table = over_table(mpos);
 		if (state->tables[table] != GOD_NONE &&
 			sb_last(state->table_orders[table]) == state->transient_ingredient) {
+			god_eating_sound(state->tables[table]);
 			sb_pop(state->table_orders[table]);
 			state->transient_previous = NULL;
 			if (sb_count(state->table_orders[table]) == 0) {
@@ -478,6 +565,7 @@ Playing_Msg state_playing_update(State_Playing * state)
 		if (fire->cooking) {
 			fire->cook_time -= sdl_state.delta_time;
 			if (fire->cook_time <= 0) {
+				play_sound(SOUND_TSS);
 				fire->cooking = false;
 				fire->in_fire += INGRED_UNCOOKED_COUNT;
 			}
@@ -501,6 +589,7 @@ Playing_Msg state_playing_update(State_Playing * state)
 					}
 					if (!repeat) break;
 				}
+				play_sound(SOUND_TABLED);
 				state->tables[i] = g;
 				state->table_orders[i] = generate_order();
 				full = false;
@@ -509,6 +598,8 @@ Playing_Msg state_playing_update(State_Playing * state)
 		}
 		if (full) {
 			state->lost = true;
+			play_sound(SOUND_THUNDER);
+			Mix_HaltMusic();
 		}
 	}
 	state->god_spawn_timer -= sdl_state.delta_time;
@@ -615,6 +706,11 @@ int main()
 {
 	srand(time(0));
 	SDL_Init(SDL_INIT_VIDEO);
+
+	Mix_Init(MIX_INIT_OGG);
+	Mix_OpenAudio(MIX_DEFAULT_FREQUENCY, MIX_DEFAULT_FORMAT, 2, 1024);
+	sound_init();
+
 	sdl_state.last_count = SDL_GetPerformanceCounter();
 	SDL_Window * window = SDL_CreateWindow(
 		"LD43",
@@ -633,26 +729,28 @@ int main()
 		sb_push(game_state_stack, gs);
 	}
 
-	for (int i = 0; i < sb_count(game_state_stack); i++) {
-		Game_State * state = game_state_stack[i];
-		switch (state->type) {
-		case STATE_PLAYING:
-			state_playing_init(&(state->state_playing));
-			break;
-		case STATE_MAIN_MENU:
-			state_main_menu_init(&(state->state_main_menu));
-			break;
-		default:
-			assert(false);
-			break;
-		}
-	}
+	bool new_frame = true;
 	
 	SDL_Event event;
 	bool running = true;
 	while (running && sb_count(game_state_stack) > 0) {
 		Game_State * game_state = sb_last(game_state_stack);
 		
+		if (new_frame) {
+			new_frame = false;
+			switch (game_state->type) {
+			case STATE_PLAYING:
+				state_playing_init(&(game_state->state_playing));
+				break;
+			case STATE_MAIN_MENU:
+				state_main_menu_init(&(game_state->state_main_menu));
+				break;
+			default:
+				assert(false);
+				break;
+			}
+		}
+
 		while (SDL_PollEvent(&event) != 0) {
 			if (event.type == SDL_QUIT) {
 				running = false;
@@ -683,6 +781,7 @@ int main()
 				break;
 			case PLAYING_LOST:
 				sb_pop(game_state_stack);
+				new_frame = true;
 				break;
 			}
 		} break;
@@ -695,11 +794,12 @@ int main()
 			case MAIN_MENU_PLAY: {
 				Game_State * gs = (Game_State*) malloc(sizeof(Game_State));
 				gs->type = STATE_PLAYING;
-				state_playing_init(&gs->state_playing);
 				sb_push(game_state_stack, gs);
+				new_frame = true;
 			} break;
 			case MAIN_MENU_QUIT:
 				sb_pop(game_state_stack);
+				new_frame = true;
 				break;
 			}
 		} break;
