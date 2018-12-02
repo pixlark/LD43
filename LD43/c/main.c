@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <math.h>
 #include <time.h>
 
 #define SDL_MAIN_HANDLED
@@ -15,6 +16,8 @@
 
 #define SCREEN_WIDTH 900
 #define SCREEN_HEIGHT 600
+
+#define PI 3.14159265
 
 // //
 // Ingredients
@@ -45,6 +48,10 @@
 #define UI_TRASH_X    712
 #define UI_TRASH_Y     37
 #define UI_TRASH_SIZE 106
+// Clock
+#define UI_CLOCK_X      537
+#define UI_CLOCK_Y       88
+#define UI_CLOCK_RADIUS  39
 // //
 
 typedef struct {
@@ -138,6 +145,7 @@ typedef struct {
 	God tables[UI_TABLE_COUNT];
 	Ingredient * table_orders[UI_TABLE_COUNT];
 	float god_spawn_reset;
+	float god_spawn_this_reset;
 	float god_spawn_timer;
 } State_Playing;
 
@@ -239,6 +247,7 @@ void state_playing_init(State_Playing * state)
 		state->table_orders[i] = NULL;
 	}
 	state->god_spawn_reset = 15.0;
+	state->god_spawn_this_reset = state->god_spawn_reset;
 	state->god_spawn_timer = 0.0;
 	
 	// Background texture
@@ -405,6 +414,7 @@ void state_playing_update(State_Playing * state)
 	// Spawn gods
 	if (state->god_spawn_timer <= 0.0) {
 		state->god_spawn_timer = state->god_spawn_reset;
+		state->god_spawn_this_reset = state->god_spawn_reset;
 		state->god_spawn_reset *= 0.9;
 		state->god_spawn_reset = fmax(state->god_spawn_reset, 8.0);
 		bool full = true;
@@ -484,6 +494,17 @@ void state_playing_render(State_Playing * state)
 						   state->ingredient_textures[state->table_orders[t][i]],
 						   NULL, &rect);
 		}
+	}
+
+	// Clock
+	{
+		SDL_SetRenderDrawColor(sdl_state.renderer, 0xff, 0xff, 0xff, 0xff);
+		int ox = UI_CLOCK_X, oy = UI_CLOCK_Y;
+		float theta = (2.0 * PI) - (state->god_spawn_timer / state->god_spawn_this_reset) * 2.0 * PI;
+		theta -= (PI / 2.0);
+		int rx = ox + (UI_CLOCK_RADIUS * cos(theta));
+		int ry = oy + (UI_CLOCK_RADIUS * sin(theta));
+		SDL_RenderDrawLine(sdl_state.renderer, ox, oy, rx, ry);
 	}
 	
 	// Transient ingredient
