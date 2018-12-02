@@ -125,6 +125,8 @@ typedef enum {
 	GOD_THOR,
 	GOD_ANUBIS,
 	GOD_RA,
+	GOD_ODIN,
+	GOD_VENUS,
 	GOD_COUNT,
 } God;
 
@@ -135,6 +137,8 @@ char * god_texture_paths[GOD_COUNT] = {
 	"resources/thor.png",
 	"resources/anubis.png",
 	"resources/ra.png",
+	"resources/odin.png",
+	"resources/venus.png",
 };
 
 SDL_Texture * load_texture_from_path(char * path)
