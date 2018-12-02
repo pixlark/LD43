@@ -41,6 +41,10 @@
 // Orders
 #define UI_ORDER_SIZE     (UI_INGRED_SIZE / 2)
 #define UI_ORDER_Y_OFFSET (UI_TABLE_H - UI_ORDER_SIZE)
+// Trashcan
+#define UI_TRASH_X    712
+#define UI_TRASH_Y     37
+#define UI_TRASH_SIZE 106
 // //
 
 typedef struct {
@@ -296,6 +300,13 @@ int over_table(Vector2 pos)
 	return -1;
 }
 
+bool over_trashcan(Vector2 pos)
+{
+	SDL_Point point = (SDL_Point) { pos.x, pos.y };
+	SDL_Rect rect = (SDL_Rect) { UI_TRASH_X, UI_TRASH_Y, UI_TRASH_SIZE, UI_TRASH_SIZE };
+	return SDL_PointInRect(&point, &rect);
+}
+
 void state_playing_mbdown(State_Playing * state, Vector2 mpos)
 {
 	// Check ingredient generators
@@ -342,6 +353,12 @@ void state_playing_mbup(State_Playing * state, Vector2 mpos)
 				state->tables[table] = GOD_NONE;
 			}
 		}
+	}
+
+	// Check trashcan
+	if (over_trashcan(mpos)) {
+		state->transient_ingredient = INGRED_NONE;
+		state->transient_previous = NULL;
 	}
 	
 	if (state->transient_previous) {
