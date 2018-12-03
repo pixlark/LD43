@@ -8,6 +8,7 @@
 
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
 #include <SDL2/SDL_mixer.h>
 
 #include "stretchy_buffer.h"
@@ -54,9 +55,25 @@
 #define UI_CLOCK_Y       88
 #define UI_CLOCK_RADIUS  39
 // Main Menu
-#define UI_PLAY_RECT ((SDL_Rect) {225, 146, 451, 135})
-#define UI_QUIT_RECT ((SDL_Rect) {162, 302, 559, 278})
+#define UI_PLAY_RECT ((SDL_Rect) {330, 143, 453, 141})
+#define UI_QUIT_RECT ((SDL_Rect) {263, 313, 557, 260})
+
+#define UI_SLIDER_X        148
+#define UI_SLIDER_Y_TOP    127
+#define UI_SLIDER_Y_BOTTOM 365
+#define UI_SLIDER_SIZE      50
+
+#define UI_DIFF_TEXT_X 115 
+#define UI_DIFF_TEXT_Y 476
+#define UI_FONT_SIZE    48
 // //
+
+static float difficulty;
+#define DIFFICULTY_MULT       2
+#define SUB_BASE_MULT      0.95
+#define SUB_MULT_DIV       20.0
+#define MINIMUM_SPAWN_TIME  5.0
+#define MST_DIV            0.75
 
 typedef struct {
 	int x;
@@ -111,6 +128,8 @@ typedef struct {
 } Sound_State;
 
 static Sound_State sound_state;
+
+static TTF_Font * default_font;
 
 void sound_init()
 {
@@ -244,25 +263,55 @@ typedef enum {
 
 typedef struct {
 	SDL_Texture * bg;
+	SDL_Texture * slider_texture;
+	float slider;
+	bool clicked_this_frame;
+	bool sliding;
 } State_Main_Menu;
+
+SDL_Rect slider_box(State_Main_Menu * state)
+{
+	return (SDL_Rect) {
+		UI_SLIDER_X, state->slider * (UI_SLIDER_Y_BOTTOM - UI_SLIDER_Y_TOP) + UI_SLIDER_Y_TOP,
+		UI_SLIDER_SIZE, UI_SLIDER_SIZE,
+	};
+}
 
 void state_main_menu_init(State_Main_Menu * state)
 {
 	play_music(MUSIC_MENU);
 	state->bg = load_texture_from_path("resources/title.png");
+	state->slider_texture = load_texture_from_path("resources/slider.png");
+	state->slider = 1.0;
+	state->clicked_this_frame = false;
+	state->sliding = false;
 }
 
 void state_main_menu_event(State_Main_Menu * state, SDL_Event event)
 {
-	
+	switch (event.type) {
+	case SDL_MOUSEBUTTONDOWN: {
+		state->clicked_this_frame = true;
+	} break;
+	case SDL_MOUSEBUTTONUP: {
+		state->sliding = false;
+	} break;
+	}
+}
+
+float fclamp(float k, float lower, float upper)
+{
+	return fmin(upper, fmax(lower, k));
 }
 
 Main_Menu_Msg state_main_menu_update(State_Main_Menu * state)
 {
 	int mx, my;
 	uint32_t mask = SDL_GetMouseState(&mx, &my);
-	if (mask & SDL_BUTTON(SDL_BUTTON_LEFT)) {
-		SDL_Point point = (SDL_Point) {mx, my};
+	SDL_Point point = (SDL_Point) {mx, my};
+	// Play/Quit buttons
+	if (state->clicked_this_frame) {
+		state->clicked_this_frame = false;
 		SDL_Rect play_rect = UI_PLAY_RECT;
 		if (SDL_PointInRect(&point, &play_rect)) {
 			return MAIN_MENU_PLAY;
@@ -271,13 +320,39 @@ Main_Menu_Msg state_main_menu_update(State_Main_Menu * state)
 		if (SDL_PointInRect(&point, &quit_rect)) {
 			return MAIN_MENU_QUIT;
 		}
+		// Difficulty slider
+		SDL_Rect slider_rect = slider_box(state);
+		if (SDL_PointInRect(&point, &slider_rect)) {
+			state->sliding = true;
+		}
 	}
+	if (state->sliding) {
+		state->slider = fclamp((float) (my - UI_SLIDER_SIZE / 2 - UI_SLIDER_Y_TOP) / 
+								        (UI_SLIDER_Y_BOTTOM - UI_SLIDER_Y_TOP),
+								0.0, 1.0);
+		state->slider = roundf(state->slider * 10) / 10;
+	}
+	// Update difficulty through slider
+	difficulty = (1.0 - state->slider) * (DIFFICULTY_MULT - 1.0) + 1.0;
 	return MAIN_MENU_NOTHING;
 }
 
 void state_main_menu_render(State_Main_Menu * state)
 {
 	SDL_RenderCopy(sdl_state.renderer, state->bg, NULL, NULL);
+	SDL_Rect slider_rect = slider_box(state);
+	SDL_RenderCopy(sdl_state.renderer, state->slider_texture, NULL, &slider_rect);
+	// Render difficulty text
+	{
+		char buffer[512];
+		sprintf(buffer, "%.1f", difficulty);
+		SDL_Surface * surface = TTF_RenderText_Solid(default_font, buffer, (SDL_Color) { 0xff, 0xff, 0xff, 0xff });
+		SDL_Texture * texture = SDL_CreateTextureFromSurface(sdl_state.renderer, surface);
+		SDL_Rect rect = (SDL_Rect) { UI_DIFF_TEXT_X, UI_DIFF_TEXT_Y, surface->w, surface->h };
+		SDL_RenderCopy(sdl_state.renderer, texture, NULL, &rect);
+		SDL_DestroyTexture(texture);
+		SDL_FreeSurface(surface);
+	}
 }
 
 typedef struct {
@@ -575,8 +650,8 @@ Playing_Msg state_playing_update(State_Playing * state)
 	if (state->god_spawn_timer <= 0.0) {
 		state->god_spawn_timer = state->god_spawn_reset;
 		state->god_spawn_this_reset = state->god_spawn_reset;
-		state->god_spawn_reset *= 0.95;
-		state->god_spawn_reset = fmax(state->god_spawn_reset, 5.0);
+		state->god_spawn_reset *= SUB_BASE_MULT - (difficulty / SUB_MULT_DIV);
+		state->god_spawn_reset = fmax(state->god_spawn_reset, MINIMUM_SPAWN_TIME - (difficulty / MST_DIV));
 		bool full = true;
 		for (int i = 0; i < UI_TABLE_COUNT; i++) {
 			if (state->tables[i] == GOD_NONE) {
@@ -704,8 +779,12 @@ typedef struct {
 
 int main()
 {
+	difficulty = 0.5;
 	srand(time(0));
 	SDL_Init(SDL_INIT_VIDEO);
+
+	TTF_Init();
+	default_font = TTF_OpenFont("resources/EBGaramond12-AllSC.ttf", UI_FONT_SIZE);
 
 	Mix_Init(MIX_INIT_OGG);
 	Mix_OpenAudio(MIX_DEFAULT_FREQUENCY, MIX_DEFAULT_FORMAT, 2, 1024);
@@ -808,8 +887,8 @@ int main()
 			break;
 		}
 
-		printf("%d\r", sb_count(game_state_stack));
-		fflush(stdout);
+		//printf("%f\r", difficulty);
+		//fflush(stdout);
 							   
 		SDL_RenderPresent(renderer);
 		
