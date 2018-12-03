@@ -69,14 +69,19 @@
 
 #define DEATH_TEXT_X   7
 #define DEATH_TEXT_Y 535
+
+#define MUSIC_SWITCH_RECT ((SDL_Rect) { 262, 544, 30, 30 });
+#define SOUND_SWITCH_RECT ((SDL_Rect) { 306, 544, 30, 30 });
+
+#define SWITCH_ESCAPE_BOX ((SDL_Rect) { 252, 534, 92, 51 });
 // //
 
 static float difficulty;
 #define DIFFICULTY_MULT       2
 #define SUB_BASE_MULT      0.95
 #define SUB_MULT_DIV       20.0
-#define MINIMUM_SPAWN_TIME  5.0
-#define MST_DIV            0.75
+#define MINIMUM_SPAWN_TIME  6.0
+#define MST_DIV            1.00
 
 typedef struct {
 	int x;
@@ -264,9 +269,18 @@ typedef enum {
 	MAIN_MENU_QUIT,
 } Main_Menu_Msg;
 
+static bool music_on = true;
+static bool sound_on = true;
+
 typedef struct {
 	SDL_Texture * bg;
 	SDL_Texture * slider_texture;
+
+	SDL_Texture * music_on_texture;
+	SDL_Texture * music_off_texture;
+	SDL_Texture * sound_on_texture;
+	SDL_Texture * sound_off_texture;
+
 	float slider;
 	bool clicked_this_frame;
 	bool sliding;
@@ -285,6 +299,12 @@ void state_main_menu_init(State_Main_Menu * state)
 	play_music(MUSIC_MENU);
 	state->bg = load_texture_from_path("resources/title.png");
 	state->slider_texture = load_texture_from_path("resources/slider.png");
+
+	state->music_on_texture = load_texture_from_path("resources/music.png");
+	state->music_off_texture = load_texture_from_path("resources/music-off.png");
+	state->sound_on_texture = load_texture_from_path("resources/sound.png");
+	state->sound_off_texture = load_texture_from_path("resources/sound-off.png");
+
 	state->slider = 1.0;
 	state->clicked_this_frame = false;
 	state->sliding = false;
@@ -312,8 +332,8 @@ Main_Menu_Msg state_main_menu_update(State_Main_Menu * state)
 	int mx, my;
 	uint32_t mask = SDL_GetMouseState(&mx, &my);
 	SDL_Point point = (SDL_Point) {mx, my};
-	// Play/Quit buttons
 	if (state->clicked_this_frame) {
+		// Play/Quit buttons
 		state->clicked_this_frame = false;
 		SDL_Rect play_rect = UI_PLAY_RECT;
 		if (SDL_PointInRect(&point, &play_rect)) {
@@ -321,12 +341,42 @@ Main_Menu_Msg state_main_menu_update(State_Main_Menu * state)
 		}
 		SDL_Rect quit_rect = UI_QUIT_RECT;
 		if (SDL_PointInRect(&point, &quit_rect)) {
-			return MAIN_MENU_QUIT;
+			// Kluge to deal with music/sound switches
+			SDL_Rect escape_box = SWITCH_ESCAPE_BOX;
+			if (!SDL_PointInRect(&point, &escape_box)) {
+				return MAIN_MENU_QUIT;
+			}
 		}
 		// Difficulty slider
 		SDL_Rect slider_rect = slider_box(state);
 		if (SDL_PointInRect(&point, &slider_rect)) {
 			state->sliding = true;
+		}
+		// Sound / Music
+		SDL_Rect music_rect = MUSIC_SWITCH_RECT;
+		if (SDL_PointInRect(&point, &music_rect)) {
+			if (music_on) {
+				Mix_VolumeMusic(0);
+				music_on = false;
+			} else {
+				Mix_VolumeMusic(MIX_MAX_VOLUME);
+				music_on = true;
+			}
+		}
+		SDL_Rect sound_rect = SOUND_SWITCH_RECT;
+		if (SDL_PointInRect(&point, &sound_rect)) {
+			int volume;
+			if (sound_on) {
+				volume = 0;
+				sound_on = false;
+			} else {
+				volume = MIX_MAX_VOLUME;
+				sound_on = true;
+			}
+			int channels = Mix_AllocateChannels(-1);
+			for (int i = 0; i < channels; i++) {
+				Mix_Volume(i, volume);
+			}
 		}
 	}
 	if (state->sliding) {
@@ -364,6 +414,16 @@ void state_main_menu_render(State_Main_Menu * state)
 		SDL_Rect rect = (SDL_Rect) { UI_DIFF_TEXT_X, UI_DIFF_TEXT_Y, w, h };
 		SDL_RenderCopy(sdl_state.renderer, texture, NULL, &rect);
 		SDL_DestroyTexture(texture);
+	}
+	// Sound/music switches
+	{
+		SDL_Texture * music_tex = music_on ? state->music_on_texture : state->music_off_texture;
+		SDL_Rect music_rect = MUSIC_SWITCH_RECT;
+		SDL_RenderCopy(sdl_state.renderer, music_tex, NULL, &music_rect);
+
+		SDL_Texture * sound_tex = sound_on ? state->sound_on_texture : state->sound_off_texture;
+		SDL_Rect sound_rect = SOUND_SWITCH_RECT;
+		SDL_RenderCopy(sdl_state.renderer, sound_tex, NULL, &sound_rect);
 	}
 }
 
@@ -623,6 +683,11 @@ void state_playing_event(State_Playing * state, SDL_Event event)
 		break;
 	case SDL_MOUSEBUTTONUP:
 		state_playing_mbup(state, make_Vector2(event.button.x, event.button.y));
+		break;
+	case SDL_KEYDOWN:
+		if (event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+			state->lost = true;
+		}
 		break;
 	}
 }
