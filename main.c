@@ -66,6 +66,9 @@
 #define UI_DIFF_TEXT_X 115 
 #define UI_DIFF_TEXT_Y 476
 #define UI_FONT_SIZE    48
+
+#define DEATH_TEXT_X   7
+#define DEATH_TEXT_Y 535
 // //
 
 static float difficulty;
@@ -337,6 +340,16 @@ Main_Menu_Msg state_main_menu_update(State_Main_Menu * state)
 	return MAIN_MENU_NOTHING;
 }
 
+SDL_Texture * render_text(char * text, SDL_Color color, int * w, int * h) 
+{
+	SDL_Surface * surface = TTF_RenderText_Solid(default_font, text, color);
+	*w = surface->w;
+	*h = surface->h;
+	SDL_Texture * texture = SDL_CreateTextureFromSurface(sdl_state.renderer, surface);
+	SDL_FreeSurface(surface);
+	return texture;
+}
+
 void state_main_menu_render(State_Main_Menu * state)
 {
 	SDL_RenderCopy(sdl_state.renderer, state->bg, NULL, NULL);
@@ -346,12 +359,11 @@ void state_main_menu_render(State_Main_Menu * state)
 	{
 		char buffer[512];
 		sprintf(buffer, "%.1f", difficulty);
-		SDL_Surface * surface = TTF_RenderText_Solid(default_font, buffer, (SDL_Color) { 0xff, 0xff, 0xff, 0xff });
-		SDL_Texture * texture = SDL_CreateTextureFromSurface(sdl_state.renderer, surface);
-		SDL_Rect rect = (SDL_Rect) { UI_DIFF_TEXT_X, UI_DIFF_TEXT_Y, surface->w, surface->h };
+		int w, h;
+		SDL_Texture * texture = render_text(buffer, (SDL_Color) { 0xff, 0xff, 0xff, 0xff }, &w, &h);
+		SDL_Rect rect = (SDL_Rect) { UI_DIFF_TEXT_X, UI_DIFF_TEXT_Y, w, h };
 		SDL_RenderCopy(sdl_state.renderer, texture, NULL, &rect);
 		SDL_DestroyTexture(texture);
-		SDL_FreeSurface(surface);
 	}
 }
 
@@ -390,6 +402,7 @@ typedef struct {
 	// Win?
 	bool lost;
 	float death_timer;
+	float time_spent;
 } State_Playing;
 
 SDL_Rect ingredient_box(Ingredient ingredient)
@@ -494,6 +507,7 @@ void state_playing_init(State_Playing * state)
 
 	// Win?
 	state->lost = false;
+	state->time_spent = 0.0;
 }
 
 Ingredient generator_click(Vector2 pos)
@@ -678,6 +692,9 @@ Playing_Msg state_playing_update(State_Playing * state)
 		}
 	}
 	state->god_spawn_timer -= sdl_state.delta_time;
+
+	state->time_spent += sdl_state.delta_time;
+
 	return PLAYING_OK;
 }
 
@@ -686,6 +703,13 @@ void state_playing_render(State_Playing * state)
 	// Death screen
 	if (state->lost) {
 		SDL_RenderCopy(sdl_state.renderer, state->death_texture, NULL, NULL);
+		char buffer[512];
+		sprintf(buffer, "You lasted %.0f seconds", state->time_spent);
+		int w, h;
+		SDL_Texture * texture = render_text(buffer, (SDL_Color) { 0xff, 0xff, 0xff, 0xff }, &w, &h);
+		SDL_Rect rect = (SDL_Rect) { DEATH_TEXT_X, DEATH_TEXT_Y, w, h };
+		SDL_RenderCopy(sdl_state.renderer, texture, NULL, &rect);
+		SDL_DestroyTexture(texture);
 		return;
 	}
 
